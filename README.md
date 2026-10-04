@@ -158,6 +158,10 @@ WantedBy=multi-user.target
 
 then run `systemctl daemon-reload && systemctl enable --now strata`.
 
+To change a setting (`parallel`, `api_key`, `host`, ...) you do not need to run setup again: edit
+`/opt/Strata/strata-<model>.json` and restart Strata (`systemctl restart strata`). Setup is only needed to compile
+again, change the model or prepare its files again.
+
 ## Which model should I pick?
 
 The installer recommends one for your RAM. The same model comes in several sizes, compressed more or less. Smaller
