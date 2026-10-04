@@ -131,6 +131,33 @@ STRATA_EXPERIMENTAL_SM60=1 ./setup.sh --setup --build \
 downloaded. `--host 0.0.0.0` makes it reachable from the other PCs on your network, always with `--api-key`. Start
 it with `STRATA_EXPERIMENTAL_SM60=1 ./setup.sh`.
 
+`<secret>` is a long random password you make up yourself, not tied to any account. Make one with
+`openssl rand -hex 32` and put it in place of `<secret>`. Your apps then use the same string as their API key
+(`api_key=` in OpenAI clients, `ANTHROPIC_AUTH_TOKEN` for Claude Code). Setup saves it as `"api_key"` in
+`strata-<model>.json`; the `STRATA_API_KEY` environment variable works too.
+
+Strata answers one request at a time. To answer several at once, add `--parallel 2` (2 to 8) to the command above,
+or `"parallel": 2` to `strata-<model>.json` and restart. Each answer gets about 10-25% slower
+([docs/BATCHING.md](docs/BATCHING.md)).
+
+Setup does not create a service. To start Strata at boot, write `/etc/systemd/system/strata.service`:
+
+```ini
+[Unit]
+Description=Strata
+After=network-online.target
+
+[Service]
+Environment=STRATA_EXPERIMENTAL_SM60=1
+ExecStart=/opt/Strata/run-iq2_xs.sh
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+then run `systemctl daemon-reload && systemctl enable --now strata`.
+
 ## Which model should I pick?
 
 The installer recommends one for your RAM. The same model comes in several sizes, compressed more or less. Smaller
