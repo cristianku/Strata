@@ -91,6 +91,29 @@ its window to stop the model. `UPDATE.bat` (`./update.sh`) updates Strata withou
 several cards, where the files go and every option:
 [docs/INSTALL.md](docs/INSTALL.md).
 
+### Older NVIDIA cards: Tesla V100 (experimental)
+
+The ready-made engine needs an RTX 20 series card or newer. A V100 (Volta, compute capability 7.0) runs the
+community build instead: `STRATA_EXPERIMENTAL_SM60=1` turns it on, and `--build` compiles the engine on your PC,
+which needs the NVIDIA CUDA Toolkit **12.x** (CUDA 13 cannot compile for Volta). For example, on a Linux server
+with the GGUF files already copied into `/opt/models/qwen3.8-flash-next-iq2_xs`:
+
+```bash
+cd /opt
+git clone https://github.com/Niko1221/Strata.git
+cd Strata
+
+STRATA_EXPERIMENTAL_SM60=1 ./setup.sh --setup --build \
+  --family qwen --model IQ2_XS \
+  --gguf-dir /opt/models/qwen3.8-flash-next-iq2_xs \
+  --host 0.0.0.0 --api-key <secret> \
+  --yes --no-start
+```
+
+`--gguf-dir` uses the files where they are (both shards, `-00001-of-00002` and `-00002-of-00002`), nothing is
+downloaded. `--host 0.0.0.0` makes it reachable from the other PCs on your network, always with `--api-key`. Start
+it with `STRATA_EXPERIMENTAL_SM60=1 ./setup.sh`.
+
 ## Which model should I pick?
 
 The installer recommends one for your RAM. The same model comes in sizes that are compressed more or less: smaller
