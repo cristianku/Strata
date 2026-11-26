@@ -113,6 +113,27 @@ Use `--runner-arg=--host-cache-mib --runner-arg=8` to pass extra arguments to
 both invocations. To compare existing traces instead, use `--compare-trace
 FP32.json --mixed-compare-trace MIXED.json`.
 
+If the V100 machine has no PyTorch installation, generate the mixed fixture
+and its HF trace on a CPU machine first. Copy them and `compare_trace.py` to
+the target. Select the V100 via `CUDA_VISIBLE_DEVICES` and run the built
+`gigachat4_cuda_test` directly (77 means **skipped**). Then exercise the
+streaming-only and resident paths with the same mixed weights:
+
+```sh
+for mib in 0 1; do
+    "$RUNNER" --cuda --model "$MIXED" --tokens 1,5,8,13,21,34,8 --generate 4 \
+        --ignore-eos --host-cache-mib 1 --gpu-cache-mib "$mib" \
+        --trace "device-$mib.json" > "metrics-$mib.json" || exit 1
+    python3 compare_trace.py "$WORK/hf-mixed.json" "device-$mib.json" || exit 1
+done
+```
+
+The comparator uses only the standard library and the CPU harness's tolerances.
+Check `metrics.cuda.streamed_tiles` in the first run and `metrics.cuda.cache_hits`
+in the second. Keep the actual GPU identity with both results. These tiny
+projections do not need multiple DMA sub-tiles: the separate device test
+covers double buffering.
+
 The pinned official weight index determines which matrices have a
 `weight_scale_inv` companion. For each 128×128 block (including partial
 blocks), set the FP32 scale to `max(abs(block))/448`, or 1 for an all-zero
