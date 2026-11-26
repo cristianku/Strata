@@ -1,0 +1,18 @@
+name: GigaChat4 offline tooling regressions
+
+# Source-only regression checks. The native CPU/CUDA builds and model runs are local.
+on: [workflow_dispatch, workflow_call]
+
+permissions:
+  contents: read
+
+jobs:
+  offline-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check the memory, layout and benchmark tooling
+        run: python3 -m unittest discover -s tools/gigachat4 -p 'test_*.py' -v
