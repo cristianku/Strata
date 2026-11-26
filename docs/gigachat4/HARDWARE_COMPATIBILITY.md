@@ -33,13 +33,23 @@ not a pass.
 
 ### Target inventory and qualification
 
-The target inventory has been requested from the server operator. Until it
-is available, VRAM size/free, negotiated PCIe link, usable NVMe space,
-sustained read rate, available RAM, memlock limit and driver version are
-**unverified**. Do not assume the 16 GB or 32 GB V100 variant, or x16 under load.
-For the operator's run, capture `nvidia-smi -q`, `nvcc --version`,
-`nvcc --list-gpu-code`, `free -b`, the cgroup memory limit, `ulimit -l`,
-`lsblk -o NAME,MODEL,TRAN,SIZE,ROTA` and `df -B1` for the model volume.
-First run the small device tests and the mixed fixture in
-[PARITY.md](PARITY.md), then measure [cold/warm inference](BENCH_PROTOCOL.md).
-No driver installation, clock adjustment or cache flush is part of this check.
+**Operator-reported inventory, 26 November 2026**, with the existing service
+stopped and before the first test result:
+
+| Item | Reported on the target |
+|---|---|
+| GPU | Two Tesla V100 PCIe 32 GB cards, each idle with 32,495 MiB free. The test selects **one** by UUID. |
+| Link and driver | PCIe Gen3 ×16; NVIDIA driver 580.178.04. Link width is not a bandwidth result. |
+| Userspace | CUDA compiler 12.9.86 lists `sm_70`; glibc 2.39. |
+| Host memory | 58 GiB available; locked-memory limit 8,192 KiB. Actual peak usage and pinned allocations need a device run. |
+| Model storage | ZFS on NVMe with **33 GiB free**. Sustained read rate has not been measured. |
+
+The 45 official safetensors shards occupy 719,715,125,808 bytes (670.29 GiB).
+The model volume is **about 637 GiB short**, even before leaving free space
+for the filesystem. A different volume or an existing verified checkpoint is
+needed for full inference. The separate [four-bit release](GGUF.md) also
+exceeds the space available and is not a supported input for the full runner.
+
+The reduced mixed fixture fits. For an independent correctness check, run the
+device tests and [compare both CUDA cache settings against HF](PARITY.md).
+Measure [cold/warm inference](BENCH_PROTOCOL.md) separately.

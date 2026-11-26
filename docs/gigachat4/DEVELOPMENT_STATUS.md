@@ -35,11 +35,11 @@ use [the offline text frontend](TOKENIZER.md). For CUDA use the
 
 ### Remaining gates
 
-1. Obtain the target inventory and run the reduced FP8/SM70 parity test on the
-   actual V100, with and without GPU residency. Check pinned allocation, peak
+1. Run the reduced FP8/SM70 parity test on one of the [confirmed V100 PCIe
+   32 GB cards](HARDWARE_COMPATIBILITY.md), with and without GPU residency. Check pinned allocation, peak
    memory and device events, including transfer boundaries and scale grids.
-2. Verify storage on the model volume. The 45 source files require **719.72 GB**
-   decimal before optional draft files or any conversion workspace. Test one
+2. Locate a volume for the **719.72 GB** of source shards. The current model
+   volume has only **33 GiB free**. Once the checkpoint is available, test one
    short full-size prompt with a reference trajectory before profiling.
 3. Quantify differences from the original dynamic FP8 activation kernels and
    BF16 intermediate rounding; this branch's weight decoding is not an
