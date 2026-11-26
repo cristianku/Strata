@@ -18,6 +18,10 @@ The test uses synthetic data. It compares all 256 E4M3FN encodings against an in
 
 **Validation recorded 2026-11-26:** NVCC 12.8.93 compiled the backend and test with `-O3 -arch=sm_70` on Linux x86-64 (GCC 14, glibc 2.36 compile headers). The linked test completed the host check for all 256 encodings, then exited 77 because CUDA detected no GPU. Device results and V100 throughput were not measured in this run.
 
+On the separate V100 target, the operator compiled `7d3944b` with NVCC
+12.9.86. The same device test exited 0 and the reduced mixed checkpoint
+passed against HF with and without residency. [Device results](BENCHMARKS.md).
+
 With a local checkpoint and valid token IDs, for example:
 
 ```sh

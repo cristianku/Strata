@@ -1,6 +1,7 @@
 # What is verified on Volta?
 
-**The binary builds for real SM70. A device run is a separate gate.**
+**The reduced FP8/BF16 fixture ran on one V100 PCIe 32 GB**, both with
+streamed projections and with GPU weight residency. See the [device results](BENCHMARKS.md).
 The development machine is an x86-64 Linux CPU environment; it exposes no
 NVIDIA device. Its RAM and disk are not the inference server's capacity.
 
@@ -41,7 +42,7 @@ stopped and before the first test result:
 | GPU | Two Tesla V100 PCIe 32 GB cards, each idle with 32,495 MiB free. The test selects **one** by UUID. |
 | Link and driver | PCIe Gen3 ×16; NVIDIA driver 580.178.04. Link width is not a bandwidth result. |
 | Userspace | CUDA compiler 12.9.86 lists `sm_70`; glibc 2.39. |
-| Host memory | 58 GiB available; locked-memory limit 8,192 KiB. Actual peak usage and pinned allocations need a device run. |
+| Host memory | 58 GiB available; locked-memory limit 8,192 KiB. The small tests ran with pinned staging; the inventory does not give peak process usage. |
 | Model storage | ZFS on NVMe with **33 GiB free**. Sustained read rate has not been measured. |
 
 The 45 official safetensors shards occupy 719,715,125,808 bytes (670.29 GiB).
@@ -50,6 +51,6 @@ for the filesystem. A different volume or an existing verified checkpoint is
 needed for full inference. The separate [four-bit release](GGUF.md) also
 exceeds the space available and is not a supported input for the full runner.
 
-The reduced mixed fixture fits. For an independent correctness check, run the
-device tests and [compare both CUDA cache settings against HF](PARITY.md).
-Measure [cold/warm inference](BENCH_PROTOCOL.md) separately.
+The operator built commit `7d3944b` on the target: CTest passed 5/5 with no
+skips, and both CUDA cache settings passed the [HF trace comparison](PARITY.md).
+This validates device execution on the fixture, not full-checkpoint inference.

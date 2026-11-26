@@ -1,10 +1,32 @@
 # GigaChat4 measurements
 
-**There is no measured full-708B or V100 token rate.** The result below
-checks whether file caching helps the native path on a small model without
-changing the generated sequence. It does not answer whether the 708B model is
-interactive. The [memory analysis](MEMORY_ANALYSIS.md) gives separate cold/warm
-transfer bounds and their assumptions.
+**A single V100 passed the reduced-model correctness test. There is no measured
+full-708B token rate.** The two experiments below use synthetic weights. The
+[memory analysis](MEMORY_ANALYSIS.md) gives separate full-model transfer bounds.
+
+### Measured: streaming vs residency on one V100
+
+The target operator built commit `7d3944b78209b0fbccb478df7fefba087953aeb4`
+with CUDA 12.9.86 for SM70 and ran the [mixed-fixture comparison](PARITY.md)
+on **one Tesla V100 PCIe 32 GB**. CTest passed 5/5 without skips; the standalone
+CUDA test also exited 0, including its serial vs two-stream projection check.
+
+The two native inference runs used the same seven input IDs, 1 MiB host cache,
+four greedy output IDs, and a per-step diagnostic trace. The operator's results:
+
+| GPU weight cache | Streamed sub-tiles | Tile hits / misses | Weight + scale bytes H→D | TTFT incl. load (ms) | Prefill (ms) | Decode, 3 steps (ms) |
+|---|---:|---:|---:|---:|---:|---:|
+| 0 MiB | 756 | 0 / 756 | 973,512 | 188.21 | 38.39 | 15.87 |
+| 1 MiB | 0 | 668 / 88 | 104,056 | 181.91 | 31.70 | 11.44 |
+
+Both runs selected the same experts as the HF oracle at all ten positions and
+generated `[58, 8, 44, 59]`. Maximum absolute logit error against HF was
+`6.95e-6`. The two device traces were byte-identical (SHA-256
+`30a594d3eb22319052fa1b8ff879ba4291863a5b20706005855b6784643bfaea`).
+With cache enabled, 104,056 weight bytes remained resident. These are weight
+transfers, not total PCIe traffic, physical NVMe reads or total process VRAM.
+There was only one timed run per setting; the byte counts verify cache behavior,
+but the times are not a full-model benchmark or evidence of an overlap speedup.
 
 ### Measured: small mixed checkpoint, CPU
 
@@ -48,14 +70,14 @@ Measured binary SHA-256: `79907b1d57985bcff1b35298b4bbbd1f43570d12a066909a633328
 The 32 generated IDs (one byte per ID in this fixture) hash to
 `7ba6b8ce4b568c4ffe99dfe634440fafc90c2c230d22543dff82b9d36a6e5703`.
 
-### V100 and full-model qualification
+### Full-model qualification
 
 | Metric | How to obtain it | Status |
 |---|---|---|
-| TTFT, prefill and generation rate | Native phase timers; use exact prompts and separate first process from warm decode | Tiny CPU run only |
+| TTFT, prefill and generation rate | Native phase timers; use exact prompts and separate first process from warm decode | Tiny CPU and V100 only |
 | Peak host RAM | Per-child high-water mark; report model-volume file cache separately | Tiny CPU run only |
 | GPU utilization / peak VRAM | Sample specified physical GPU and compute PID; sampled peak is a lower bound | Not measured |
-| PCIe | Native H→D/D→H bytes and event time; report link negotiation and any independent bus counters separately | Not measured |
+| PCIe | Native H→D/D→H bytes and event time; report link negotiation and any independent bus counters separately | Tiny V100 weight transfers measured; no full-size bus measurement |
 | NVMe | Selected device sector delta and wall interval with competing activity recorded | Not measured |
 | Routed expert cache hit ratio | `expert_cache_hits / (expert_cache_hits + expert_cache_misses)` on device tiles, not all cached tensors | Not measured on full-size routes |
 | CUDA kernel vs transfer time | CUDA event counters plus host read seconds; do not equate summed event time with wall time when overlapping | Not measured |

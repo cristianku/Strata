@@ -29,15 +29,16 @@ use [the offline text frontend](TOKENIZER.md). For CUDA use the
 | Reduced model | Four-layer F32 and mixed FP8/BF16 fixtures ran through native GDN, DSA, MoE and output head. Ten steps per case. All selected expert sets and all generated tokens matched the official CPU reference using the same weights. Max absolute logit errors `7.53e-6` and `7.39e-6`. The mixed comparison uses dequantized weights with FP32 compute. [Parity](PARITY.md) |
 | Caching | Range-bounded file reads; host and device residency budgets; direct device-hit path; optional file read-ahead for the next **already selected** expert. Tests exercise eviction, cache bypass, partial FP8 blocks, offsets above 4 GiB and truncated reads. [Weights](WEIGHTS.md) |
 | Build and isolation | Standalone CPU, main-tree CPU and CUDA 12.8 SM70 compiled. On the CPU machine all four C++ component tests passed; the device-only test reported skip. Existing `model_family_test` and `gguf_geometry_test` passed and produced identical binaries with `STRATA_BUILD_GIGACHAT4` on and off. |
-| Performance | [Tiny CPU measurements](BENCHMARKS.md) and a reproducible device protocol; no full-checkpoint throughput or quality claims. |
-| Optional copy pipeline | `--cuda --overlap-copies` enables two staging slots on eligible nonresident projections. Compiled for SM70; actual concurrency and speedup require a V100 timeline. |
+| V100 runtime | Operator reports 5/5 tests passed on one V100 PCIe 32 GB. The mixed fixture matched the HF reference with streaming and with 1 MiB GPU cache (ten steps, exact routes and IDs, max logit error `6.95e-6`). |
+| Performance | [Tiny CPU and V100 measurements](BENCHMARKS.md); no full-checkpoint throughput or quality claims. |
+| Optional copy pipeline | The V100 projection test passed for serial and two-stream output. Actual overlap and any speedup still require profiling. |
 | Four-bit GGUF | [Standalone CPU probe](GGUF.md) locates a single routed projection in the separate 429.44 GB GGUF release. One real Q4_K block matched the independent decoder. This format is not yet an end-to-end input for `strata-gigachat4`. |
 
 ### Remaining gates
 
-1. Run the reduced FP8/SM70 parity test on one of the [confirmed V100 PCIe
-   32 GB cards](HARDWARE_COMPATIBILITY.md), with and without GPU residency. Check pinned allocation, peak
-   memory and device events, including transfer boundaries and scale grids.
+1. Profile peak GPU/host memory and copy/compute concurrency with projections
+   large enough to exercise both staging slots. The reduced end-to-end fixture
+   verifies numerical parity and residency, not these performance properties.
 2. Locate a volume for the **719.72 GB** of source shards. The current model
    volume has only **33 GiB free**. Once the checkpoint is available, test one
    short full-size prompt with a reference trajectory before profiling.
