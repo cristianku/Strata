@@ -998,6 +998,12 @@ if(STRATA_BUILD_HY4)
   endif()
 endif()
 
+# Opt-in checkpoint-native GigaChat4 engine. No change to the default model or backend.
+option(STRATA_BUILD_GIGACHAT4 "Build the experimental GigaChat4-708B shape engine" OFF)
+if(STRATA_BUILD_GIGACHAT4)
+  add_subdirectory(src/gigachat4)
+endif()
+
 # ---- strata-inkling: standalone Inkling-2-Mini (.strata v1.1) shape-engine binary (CMake component `inkling2`) ----
 option(STRATA_BUILD_INKLING "Build strata-inkling: Inkling-2-Mini (.strata v1.1) looped MoE engine (alias of STRATA_BUILD_INKLING2)" ON)
 option(STRATA_BUILD_INKLING2 "Build strata-inkling: Inkling-2-Mini (.strata v1.1) looped MoE engine + Vision + 1..64 continuous batching" ON)
