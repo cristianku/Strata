@@ -40,7 +40,8 @@ void json_file(const std::string& path, const gc::Config& j) {
 
 const char* usage =
     "strata-gigachat4 --model DIR --tokens ID[,ID...] [--generate N] [--ignore-eos]\n"
-    "  [--host-cache-mib N] [--cuda --gpu-cache-mib N] [--prefetch] [--routes FILE.jsonl] [--trace FILE]\n"
+    "  [--host-cache-mib N] [--cuda [--gpu-cache-mib N] [--overlap-copies]] [--prefetch]\n"
+    "  [--routes FILE.jsonl] [--trace FILE]\n"
     "  Prints generated IDs and timing counters as JSON. --trace is for tiny fixtures.\n";
 }  // namespace
 
@@ -48,7 +49,7 @@ int main(int argc, char** argv) try {
     std::string dir, trace_path, routes_path;
     std::vector<size_t> tokens;
     size_t generate = 1, host = 0, gpu = 0;
-    bool cuda = false, ignore_eos = false, prefetch = false;
+    bool cuda = false, ignore_eos = false, prefetch = false, overlap = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         auto value = [&]() -> std::string {
@@ -69,12 +70,14 @@ int main(int argc, char** argv) try {
         else if (arg == "--host-cache-mib") host = mib(value());
         else if (arg == "--gpu-cache-mib") gpu = mib(value());
         else if (arg == "--cuda") cuda = true;
+        else if (arg == "--overlap-copies") overlap = true;
         else if (arg == "--ignore-eos") ignore_eos = true;
         else if (arg == "--prefetch") prefetch = true;
         else if (arg == "--trace") trace_path = value();
         else if (arg == "--routes") routes_path = value();
         else throw std::invalid_argument("unknown option " + arg);
     }
+    if (overlap && !cuda) throw std::invalid_argument("--overlap-copies requires --cuda");
     if (dir.empty() || tokens.empty() || (gpu && !cuda)) throw std::invalid_argument(usage);
     const auto start = Clock::now();
     std::ifstream config_file(std::filesystem::path(dir) / "config.json");
@@ -90,7 +93,7 @@ int main(int argc, char** argv) try {
     std::unique_ptr<gc::MatvecBackend> backend;
     if (cuda) {
 #ifdef STRATA_GIGACHAT4_CUDA
-        backend = gc::make_cuda_backend(gpu);
+        backend = gc::make_cuda_backend(gpu, overlap);
 #else
         throw std::invalid_argument("this build does not include CUDA");
 #endif

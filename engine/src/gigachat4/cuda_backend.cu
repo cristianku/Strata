@@ -99,6 +99,7 @@ struct FreeStream { void operator()(cudaStream_t s) const noexcept { cudaStreamD
 struct FreeEvent  { void operator()(cudaEvent_t e) const noexcept { cudaEventDestroy(e); } };
 using Stream = std::unique_ptr<std::remove_pointer_t<cudaStream_t>, FreeStream>;
 using Event = std::unique_ptr<std::remove_pointer_t<cudaEvent_t>, FreeEvent>;
+using Pinned = std::unique_ptr<unsigned char, FreeHost>;
 
 Stream new_stream() {
     cudaStream_t s;
@@ -109,6 +110,16 @@ Event new_event() {
     cudaEvent_t e;
     check(cudaEventCreate(&e), "create timing event");
     return Event(e);
+}
+Pinned new_stage() {
+    unsigned char* p;
+    check(cudaMallocHost(&p, stage_bytes), "allocate pinned staging buffer");
+    return Pinned(p);
+}
+float elapsed_ms(cudaEvent_t begin, cudaEvent_t end) {
+    float elapsed;
+    check(cudaEventElapsedTime(&elapsed, begin, end), "measure operation");
+    return elapsed;
 }
 
 class Buffer {
@@ -131,6 +142,7 @@ public:
 struct Stats {
     uint64_t hits = 0, misses = 0, expert_hits = 0, expert_misses = 0, evictions = 0;
     uint64_t streamed = 0, launches = 0, h2d = 0, d2h = 0, weight_upload = 0;
+    uint64_t overlap_calls = 0, overlap_tiles = 0;
     size_t resident = 0, peak = 0;
     double kernel_ms = 0, h2d_ms = 0, d2h_ms = 0;
 };
@@ -142,12 +154,28 @@ struct Entry {
     Buffer data;
 };
 
+// The existing pinned stage, device scratch and compute stream serve slot 0.
+// Allocate the second slot and its copy stream only on the first eligible call.
+struct Pipeline {
+    struct Flight {
+        Event copy_begin = new_event(), copied = new_event();
+        Event kernel_begin = new_event(), done = new_event();
+        size_t pending_bytes = 0;
+    };
+    Stream copy = new_stream();
+    Pinned extra_stage = new_stage();
+    Buffer extra_scratch;
+    Flight flight[2];
+};
+
 class State {
     const size_t budget_;
+    const bool overlap_;
     Stream stream_ = new_stream();
     Event begin_ = new_event(), end_ = new_event();
-    std::unique_ptr<unsigned char, FreeHost> stage_;
+    Pinned stage_ = new_stage();
     Buffer x_, y_, scratch_;
+    std::unique_ptr<Pipeline> pipe_;
     std::list<Entry> lru_;    // MRU first; iterators stable across splice
     std::unordered_map<std::string, std::list<Entry>::iterator> by_key_;
     Stats st_;
@@ -156,13 +184,10 @@ class State {
     void finish(double& milliseconds) {
         check(cudaEventRecord(end_.get(), stream_.get()), "record end");
         check(cudaEventSynchronize(end_.get()), "wait for operation");
-        float elapsed;
-        check(cudaEventElapsedTime(&elapsed, begin_.get(), end_.get()), "measure operation");
-        milliseconds += elapsed;
+        milliseconds += elapsed_ms(begin_.get(), end_.get());
     }
 
-    // Borrowed loader memory is read synchronously. Each DMA uses this one
-    // pinned buffer, and its stream event completes before we touch it again.
+    // Serial transfers use slot 0. The stream event completes before reuse.
     void transfer(void* device, void* host_out, const void* host_in, size_t bytes) {
         auto* d = static_cast<unsigned char*>(device);
         auto* out = static_cast<unsigned char*>(host_out);
@@ -196,14 +221,13 @@ class State {
         st_.weight_upload += layout.raw + layout.scale_bytes;
     }
 
-    void launch(Format f, const Buffer& b, Layout layout, size_t row0, size_t col0,
-                size_t rows, size_t cols) {
+    void enqueue_gemv(Format f, const Buffer& b, Layout layout, size_t row0, size_t col0,
+                      size_t rows, size_t cols) {
         const auto* scales = reinterpret_cast<const float*>(b.get() + layout.scale_offset);
         const auto* x = reinterpret_cast<const float*>(x_.get()) + col0;
         auto* y = reinterpret_cast<float*>(y_.get()) + row0;
         const unsigned blocks = static_cast<unsigned>(std::min<size_t>(65535, div_up(rows, threads / warp)));
         const size_t sc = div_up(cols, block_side), phase = row0 % block_side;
-        start();
         #define LAUNCH(F) gemv<F><<<blocks, threads, 0, stream_.get()>>>( \
             b.get(), scales, x, y, rows, cols, sc, phase, col0 != 0)
         switch (f) {
@@ -214,11 +238,83 @@ class State {
         }
         #undef LAUNCH
         check(cudaGetLastError(), "launch gemv");
+    }
+
+    void launch(Format f, const Buffer& b, Layout layout, size_t row0, size_t col0,
+                size_t rows, size_t cols) {
+        start();
+        enqueue_gemv(f, b, layout, row0, col0, rows, cols);
         finish(st_.kernel_ms);
         ++st_.launches;
     }
 
+    // Waiting on this slot's last kernel also fences both H2D copies, via
+    // cudaStreamWaitEvent below. Neither buffer nor its timing events can be
+    // reused until the counters have consumed that generation of the events.
+    void retire(Pipeline::Flight& slot) {
+        if (!slot.pending_bytes) return;
+        check(cudaEventSynchronize(slot.done.get()), "wait for streamed kernel");
+        const float copy_ms = elapsed_ms(slot.copy_begin.get(), slot.copied.get());
+        const float compute_ms = elapsed_ms(slot.kernel_begin.get(), slot.done.get());
+        st_.h2d_ms += copy_ms;
+        st_.kernel_ms += compute_ms;
+        st_.h2d += slot.pending_bytes;
+        st_.weight_upload += slot.pending_bytes;
+        ++st_.launches;
+        ++st_.streamed;
+        ++st_.overlap_tiles;
+        slot.pending_bytes = 0;
+    }
+
+    bool pipeline_rows(Format f, const unsigned char* raw, const Vec& scales, size_t rows, size_t cols) {
+        const size_t row_bytes = cols * width(f);  // already validated by describe()
+        size_t height = stage_bytes / row_bytes;
+        if (!height || rows <= height) return false; // wide split row or a single raw tile
+        const size_t sc = div_up(cols, block_side);
+        if (f == Format::fp8) {
+            // Raw and scales share one 1 MiB pinned slot. Allow for a tile
+            // starting anywhere inside a row block, plus alignment padding.
+            const size_t overhead = 3 + sizeof(float) * sc * div_up(block_side - 1 + height, block_side);
+            if (overhead >= stage_bytes) return false;
+            height = (stage_bytes - overhead) / row_bytes;
+            if (!height) return false; // even a whole packed row cannot fit
+        }
+        if (!pipe_) pipe_ = std::make_unique<Pipeline>();
+        // No CUDA allocation (an implicit barrier) inside the active pipeline.
+        scratch_.reserve(stage_bytes);
+        pipe_->extra_scratch.reserve(stage_bytes);
+        unsigned next = 0;
+        for (size_t r = 0; r < rows; next ^= 1) {
+            auto& slot = pipe_->flight[next];
+            retire(slot);
+            const size_t nr = std::min(rows - r, height);
+            const size_t ns = f == Format::fp8 ? div_up(r % block_side + nr, block_side) * sc : 0;
+            const Layout tile(nr * row_bytes, ns);
+            unsigned char* host = next ? pipe_->extra_stage.get() : stage_.get();
+            Buffer& device = next ? pipe_->extra_scratch : scratch_;
+            std::memcpy(host, raw + r * row_bytes, tile.raw);
+            if (ns) std::memcpy(host + tile.scale_offset, scales.data() + r / block_side * sc, tile.scale_bytes);
+
+            const cudaStream_t copy = pipe_->copy.get();
+            check(cudaEventRecord(slot.copy_begin.get(), copy), "time streamed upload");
+            check(cudaMemcpyAsync(device.get(), host, tile.raw, cudaMemcpyHostToDevice, copy), "upload streamed rows");
+            if (ns) check(cudaMemcpyAsync(device.get() + tile.scale_offset, host + tile.scale_offset,
+                                          tile.scale_bytes, cudaMemcpyHostToDevice, copy), "upload streamed scales");
+            check(cudaEventRecord(slot.copied.get(), copy), "mark streamed upload complete");
+            check(cudaStreamWaitEvent(stream_.get(), slot.copied.get(), 0), "order streamed gemv after upload");
+            check(cudaEventRecord(slot.kernel_begin.get(), stream_.get()), "time streamed kernel");
+            enqueue_gemv(f, device, tile, r, 0, nr, cols);
+            check(cudaEventRecord(slot.done.get(), stream_.get()), "mark streamed kernel complete");
+            slot.pending_bytes = tile.raw + tile.scale_bytes;
+            r += nr;
+        }
+        for (auto& slot : pipe_->flight) retire(slot); // also the short tail, before D2H reuses slot 0
+        ++st_.overlap_calls;
+        return true;
+    }
+
     void stream_tiles(Format f, const unsigned char* raw, const Vec& scales, size_t rows, size_t cols) {
+        if (overlap_ && pipeline_rows(f, raw, scales, rows, cols)) return;
         // Prefer whole rows so both file and scale slices are contiguous. If a
         // single row is larger than the cap, split it at 128-column boundaries.
         const size_t w = width(f), tile_cols = std::min(cols, stage_bytes / w);
@@ -273,12 +369,14 @@ class State {
     }
 
 public:
-    explicit State(size_t budget) : budget_(budget) {
-        unsigned char* p;
-        check(cudaMallocHost(&p, stage_bytes), "allocate pinned staging buffer");
-        stage_.reset(p);
+    State(size_t budget, bool overlap) : budget_(budget), overlap_(overlap) {}
+    void drain() noexcept {
+        // On an enqueue/record error work may be in flight without a valid
+        // completion event. Drain both streams before any buffer can be reused.
+        if (pipe_) cudaStreamSynchronize(pipe_->copy.get());
+        cudaStreamSynchronize(stream_.get());
+        if (pipe_) for (auto& slot : pipe_->flight) slot.pending_bytes = 0;
     }
-    void drain() noexcept { cudaStreamSynchronize(stream_.get()); }
     ~State() { drain(); }
 
     bool multiply_cached(const std::string& key, const std::string& dtype, size_t rows,
@@ -332,7 +430,9 @@ public:
                 {"cache_entries", by_key_.size()}, {"cache_hits", st_.hits}, {"cache_misses", st_.misses},
                 {"expert_cache_hits", st_.expert_hits}, {"expert_cache_misses", st_.expert_misses},
                 {"cache_evictions", st_.evictions}, {"streamed_tiles", st_.streamed}, {"kernel_launches", st_.launches},
-                {"pinned_bytes", stage_bytes}, {"stream_scratch_bytes", scratch_.size()},
+                {"overlap_enabled", overlap_}, {"overlap_calls", st_.overlap_calls}, {"overlap_tiles", st_.overlap_tiles},
+                {"pinned_bytes", stage_bytes * (pipe_ ? 2 : 1)},
+                {"stream_scratch_bytes", scratch_.size() + (pipe_ ? pipe_->extra_scratch.size() : 0)},
                 {"input_buffer_bytes", x_.size()}, {"output_buffer_bytes", y_.size()},
                 {"h2d_bytes", st_.h2d}, {"d2h_bytes", st_.d2h}, {"weight_h2d_bytes", st_.weight_upload},
                 {"kernel_ms", st_.kernel_ms}, {"h2d_ms", st_.h2d_ms}, {"d2h_ms", st_.d2h_ms}};
@@ -369,12 +469,12 @@ class Backend final : public MatvecBackend {
         }
     }
 public:
-    explicit Backend(size_t budget) {
+    Backend(size_t budget, bool overlap) {
         check(cudaGetDevice(&device_), "get device");
         cudaDeviceProp prop{};
         check(cudaGetDeviceProperties(&prop, device_), "get device properties");
         if (prop.major < 7) throw std::runtime_error("GigaChat4 CUDA requires compute capability 7.0 or later");
-        state_ = std::make_unique<State>(budget);
+        state_ = std::make_unique<State>(budget, overlap);
     }
     ~Backend() override {
         // Destruct on the owning device, including when called from a different
@@ -403,8 +503,8 @@ public:
 
 } // namespace
 
-std::unique_ptr<MatvecBackend> make_cuda_backend(size_t cache_bytes) {
-    return std::make_unique<Backend>(cache_bytes);
+std::unique_ptr<MatvecBackend> make_cuda_backend(size_t cache_bytes, bool overlap) {
+    return std::make_unique<Backend>(cache_bytes, overlap);
 }
 Config cuda_metrics(const MatvecBackend& backend) {
     const auto* cuda = dynamic_cast<const Backend*>(&backend);

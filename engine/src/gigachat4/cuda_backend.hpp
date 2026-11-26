@@ -5,8 +5,9 @@
 namespace strata::gigachat4 {
 
 // Uses the current CUDA device. Calls are synchronous; the byte budget is for
-// resident raw weights and their scales. Zero selects streaming only.
-std::unique_ptr<MatvecBackend> make_cuda_backend(size_t cache_bytes);
+// resident raw weights and their scales. Zero selects streaming only. Opt in
+// to double-buffered H2D for multi-tile, whole-row streaming with overlap=true.
+std::unique_ptr<MatvecBackend> make_cuda_backend(size_t cache_bytes, bool overlap = false);
 
 // Cumulative counters and CUDA-event times (ms); see docs/gigachat4/CUDA.md.
 Config cuda_metrics(const MatvecBackend&);

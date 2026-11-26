@@ -105,3 +105,11 @@ GPU and disk activity from other processes, filesystem readahead, virtualized
 storage and the observer itself can affect these measurements. Keep those limits
 with the numbers. A run without device counters can establish logical read volume;
 it cannot establish how many bytes came from an SSD.
+
+## Comparing the optional copy pipeline
+
+Run the same CUDA command twice, adding `--overlap-copies` only for the second
+series. Keep cache budgets, GPU, prompt and page residency comparable. Check
+that generated IDs agree and `metrics.cuda.overlap_tiles` is positive before
+comparing timings. An event count proves the pipeline was used; a device
+timeline is needed to establish concurrency. See [CUDA.md](CUDA.md).

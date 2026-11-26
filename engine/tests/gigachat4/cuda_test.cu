@@ -52,10 +52,12 @@ void device_decode_test() {
 }
 
 // Dyadic values keep these selected sums exactly representable in f32.
-void fp8_tiles(MatvecBackend& backend, const std::string& key, size_t rows, size_t cols) {
+void fp8_tiles(MatvecBackend& backend, const std::string& key, size_t rows, size_t cols,
+               MatvecBackend* compare = nullptr) {
     const size_t scale_cols = (cols + 127) / 128;
     Vec scales(((rows + 127) / 128) * scale_cols);
-    for (size_t i = 0; i < scales.size(); ++i) scales[i] = 0.25f * float(1 + (i % 5));
+    for (size_t i = 0; i < scales.size(); ++i)
+        scales[i] = 0.25f * float(1 + ((3 * (i / scale_cols) + 2 * (i % scale_cols)) % 7));
     const unsigned char patterns[] = {0x00, 0x80, 0x01, 0x87, 0x08, 0xb8, 0x39, 0x42};
     std::vector<unsigned char> raw(rows * cols);
     Vec x(cols), expected(rows);
@@ -71,6 +73,11 @@ void fp8_tiles(MatvecBackend& backend, const std::string& key, size_t rows, size
     }
     const Vec result = backend.multiply(key, raw.data(), raw.size(), "F8_E4M3", scales, rows, cols, x);
     require(result == expected, "FP8 matvec mismatch for " + key);
+    if (compare) {
+        const Vec other = compare->multiply(key, raw.data(), raw.size(), "F8_E4M3", scales, rows, cols, x);
+        require(result.size() == other.size() && std::memcmp(result.data(), other.data(), rows * sizeof(float)) == 0,
+                "serial and overlap outputs differ for " + key);
+    }
 }
 
 void dense_formats(MatvecBackend& backend) {
@@ -125,6 +132,43 @@ void bounded_stream_test() {
             "streaming staging bound");
 }
 
+void overlap_test() {
+    auto serial = make_cuda_backend(0);
+    auto pipeline = make_cuda_backend(0, true);
+    fp8_tiles(*serial, "small-serial-fallback", 130, 139, pipeline.get());
+    const auto before = cuda_metrics(*pipeline);
+    require(before.at("overlap_enabled") == true && before.at("overlap_tiles") == 0 &&
+            before.at("pinned_bytes") == (1u << 20), "small tile should not allocate an extra slot");
+
+    // Five tiles: reuse each slot, then drain an odd tail. All four internal
+    // boundaries share a partial 128-row scale block with the next tile.
+    constexpr size_t rows = 8199, cols = 513;
+    fp8_tiles(*serial, "five-tile-pipeline", rows, cols, pipeline.get());
+    const auto used = cuda_metrics(*pipeline);
+    require(used.at("overlap_calls") == 1 && used.at("overlap_tiles") == 5 &&
+            used.at("kernel_launches") == 6 && used.at("streamed_tiles") == 6, "retire all pipeline tiles once");
+    require(used.at("pinned_bytes") == (2u << 20) && used.at("stream_scratch_bytes") == (2u << 20),
+            "double-buffer resource bound");
+    const size_t transmitted = rows * cols + (((rows + 127) / 128) + 4) * ((cols + 127) / 128) * sizeof(float);
+    auto delta = [&](const char* field) { return used.at(field).get<uint64_t>() - before.at(field).get<uint64_t>(); };
+    require(delta("weight_h2d_bytes") == transmitted && delta("h2d_bytes") == transmitted + cols * sizeof(float) &&
+            delta("d2h_bytes") == rows * sizeof(float), "pipeline transfer accounting");
+    for (const auto field : {"kernel_ms", "h2d_ms", "d2h_ms"}) {
+        const auto t = used.at(field).get<double>();
+        require(std::isfinite(t) && t >= before.at(field).get<double>(), "pipeline event timing");
+    }
+
+    // Reuse slot 0 for a serial wide row, then run another even-tail pipeline.
+    fp8_tiles(*serial, "wide-serial-fallback", 1, (1u << 20) + 11, pipeline.get());
+    require(cuda_metrics(*pipeline).at("overlap_calls") == 1, "split rows must stay serial");
+    fp8_tiles(*serial, "two-tile-pipeline", 2117, 513, pipeline.get());
+    const auto resumed = cuda_metrics(*pipeline);
+    require(resumed.at("overlap_calls") == 2 && resumed.at("overlap_tiles") == 7 &&
+            resumed.at("cache_misses") == 4, "reuse pipeline after a serial call");
+    require(cuda_metrics(*serial).at("overlap_enabled") == false && cuda_metrics(*serial).at("overlap_tiles") == 0,
+            "overlap must be opt-in");
+}
+
 template<class F> void rejects(F f, const char* what) {
     try { f(); } catch (const std::invalid_argument&) { return; }
     throw std::runtime_error(std::string("did not reject ") + what);
@@ -168,7 +212,8 @@ int main() try {
     invalid_test(*backend);
     cache_test();
     bounded_stream_test();
-    std::printf("PASS: CUDA matvec, FP8 decode, streaming and LRU on %s (sm_%d%d)\n",
+    overlap_test();
+    std::printf("PASS: CUDA matvec, FP8 decode, serial/overlap streaming and LRU on %s (sm_%d%d)\n",
                 prop.name, prop.major, prop.minor);
     return 0;
 } catch (const std::exception& e) {

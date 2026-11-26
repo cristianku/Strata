@@ -292,6 +292,7 @@ def main():
     p.add_argument("--gpu-cache-mib", type=int)
     p.add_argument("--host-cache-mib", type=int)
     p.add_argument("--prefetch", action="store_true", help="ask the runner to advise kernel file readahead")
+    p.add_argument("--overlap-copies", action="store_true", help="use two CUDA streams for eligible weight tiles")
     p.add_argument("--gpu-id", help="optional nvidia-smi selector for monitoring only (one index or UUID)")
     p.add_argument("--sample-ms", type=int, default=500, help="target GPU and live proc I/O sample interval")
     p.add_argument("--disk-device", help="optional kernel device or partition name in /sys/class/block")
@@ -314,12 +315,16 @@ def main():
         p.error("--generate must be nonnegative; --repeat and --sample-ms must be positive")
     if args.gpu_cache_mib and not args.cuda:
         p.error("--gpu-cache-mib requires --cuda")
+    if args.overlap_copies and not args.cuda:
+        p.error("--overlap-copies requires --cuda")
     if args.disk_device and ("/" in args.disk_device or args.disk_device in (".", "..")):
         p.error("--disk-device takes a kernel device name, e.g. nvme0n1")
     command = [str(args.runner), "--model", str(args.model), "--tokens", args.tokens,
                "--generate", str(args.generate), "--ignore-eos"]
     if args.cuda:
         command.append("--cuda")
+    if args.overlap_copies:
+        command.append("--overlap-copies")
     if args.prefetch:
         command.append("--prefetch")
     for flag, n in (("--gpu-cache-mib", args.gpu_cache_mib), ("--host-cache-mib", args.host_cache_mib)):

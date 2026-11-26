@@ -25,7 +25,7 @@ for name in ('model', 'tokens', 'generate'):
     p.add_argument('--' + name, required=True)
 for name in ('host-cache-mib', 'gpu-cache-mib'):
     p.add_argument('--' + name, type=int)
-for name in ('ignore-eos', 'cuda', 'prefetch'):
+for name in ('ignore-eos', 'cuda', 'prefetch', 'overlap-copies'):
     p.add_argument('--' + name, action='store_true')
 a = p.parse_args()
 assert a.ignore_eos
@@ -101,7 +101,7 @@ class BenchmarkCLI(unittest.TestCase):
         self.assertGreater(a["child_peak_rss_bytes"], b["child_peak_rss_bytes"] + (8 << 20))
 
     def test_prefetch_is_independent_of_cuda_and_host_cache(self):
-        for options in ([], ["--cuda", "--host-cache-mib", "0", "--gpu-cache-mib", "8"]):
+        for options in ([], ["--cuda", "--host-cache-mib", "0", "--gpu-cache-mib", "8", "--overlap-copies"]):
             with self.subTest(options=options):
                 report = self.bench("--repeat", "1", "--prefetch", *options, n=1)
                 run = report["runs"][0]
@@ -112,6 +112,7 @@ class BenchmarkCLI(unittest.TestCase):
                 self.assertEqual(run["metrics"]["weights"]["logical_payload_bytes_read"], 448)
                 self.assertIsNone(run["decode_tokens_per_second"])
                 if options:
+                    self.assertIn("--overlap-copies", argv)
                     self.assertEqual(argv[argv.index("--host-cache-mib") + 1], "0")
                     self.assertEqual(argv[argv.index("--gpu-cache-mib") + 1], "8")
                     self.assertEqual(run["metrics"]["cuda"]["kernel_ms"], 0)
