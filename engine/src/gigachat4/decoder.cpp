@@ -72,7 +72,8 @@ Vec mlp(Weights& w, const std::string& p, const Vec& x, size_t intermediate, flo
     return w.linear(p + "down_proj.weight", up, x.size());
 }
 
-Decoder::Decoder(Config cfg, Weights& weights) : config_(std::move(cfg)), weights_(weights) {
+Decoder::Decoder(Config cfg, Weights& weights, bool prefetch_next_expert)
+    : config_(std::move(cfg)), weights_(weights), prefetch_next_expert_(prefetch_next_expert) {
     const auto& c = config_;
     require(c.at("model_type") == "gigachat4", "expected GigaChat4 checkpoint");
     require(c.at("norm_type") == "GatedNorm" && c.at("layernorm_type") == "pre_post" &&
@@ -136,7 +137,10 @@ Vec Decoder::step(size_t token, Config* trace, Config* route_trace) {
                                          w.read(p + "mlp.gate.e_score_correction_bias", {experts}),
                                          c.at("num_experts_per_tok"), c.at("routed_scaling_factor"));
             a.assign(hidden, 0.f);
-            for (auto [expert, weight] : r) {
+            for (size_t j = 0; j < r.size(); ++j) {
+                const auto [expert, weight] = r[j];
+                if (prefetch_next_expert_ && j + 1 < r.size())
+                    w.prefetch_expert(p + "mlp.experts." + std::to_string(r[j+1].expert) + ".");
                 if (trace || route_trace) ids.push_back(expert);
                 add(a, mlp(w, p + "mlp.experts." + std::to_string(expert) + ".", h, width, clip), weight);
             }

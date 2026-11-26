@@ -15,7 +15,7 @@ Vec mlp(Weights&, const std::string& prefix, const Vec& input, size_t intermedia
 
 class Decoder {
 public:
-    Decoder(Config config, Weights& weights);
+    Decoder(Config config, Weights& weights, bool prefetch_next_expert = false);
     // One unpadded sequence. Pass a trace only with small fixtures: it records
     // intermediate activations and full-vocabulary logits for parity checks.
     Vec step(size_t token, Config* trace = nullptr, Config* routes = nullptr);
@@ -27,6 +27,7 @@ private:
     std::vector<bool> sparse_;
     size_t position_ = 0;
     bool failed_ = false;
+    bool prefetch_next_expert_;
 };
 
 }  // namespace strata::gigachat4

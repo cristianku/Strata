@@ -19,6 +19,7 @@ public:
     virtual Vec linear(const std::string& name, const Vec& x, size_t out) = 0;
     virtual Vec read(const std::string& name, const std::vector<size_t>& shape) = 0;
     virtual Vec row(const std::string& name, size_t rows, size_t cols, size_t index) = 0;
+    virtual void prefetch_expert(const std::string&) {}
 };
 
 // One state per sequence per layer. Prefill is repeated causal step execution.
