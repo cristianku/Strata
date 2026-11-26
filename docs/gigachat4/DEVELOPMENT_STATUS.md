@@ -30,6 +30,8 @@ use [the offline text frontend](TOKENIZER.md). For CUDA use the
 | Caching | Range-bounded file reads; host and device residency budgets; direct device-hit path; optional file read-ahead for the next **already selected** expert. Tests exercise eviction, cache bypass, partial FP8 blocks, offsets above 4 GiB and truncated reads. [Weights](WEIGHTS.md) |
 | Build and isolation | Standalone CPU, main-tree CPU and CUDA 12.8 SM70 compiled. On the CPU machine all four C++ component tests passed; the device-only test reported skip. Existing `model_family_test` and `gguf_geometry_test` passed and produced identical binaries with `STRATA_BUILD_GIGACHAT4` on and off. |
 | Performance | [Tiny CPU measurements](BENCHMARKS.md) and a reproducible device protocol; no full-checkpoint throughput or quality claims. |
+| Optional copy pipeline | `--cuda --overlap-copies` enables two staging slots on eligible nonresident projections. Compiled for SM70; actual concurrency and speedup require a V100 timeline. |
+| Four-bit GGUF | [Standalone CPU probe](GGUF.md) locates a single routed projection in the separate 429.44 GB GGUF release. One real Q4_K block matched the independent decoder. This format is not yet an end-to-end input for `strata-gigachat4`. |
 
 ### Remaining gates
 
